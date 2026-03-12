@@ -32,7 +32,13 @@
   const commentLimit = 1000;
   const topicListLimit = 100;
   const likeLimit = 50;
-  // 获取当前页面的URL
+
+  // 最小浏览时间（毫秒），无回复帖子至少停留此时长
+  const minReadTime = 8000; // 8秒，可按需调整
+  const fallbackTimerTime = 5000; // 等待超时时间
+  // 记录本次页面进入时间
+  const pageEnterTime = Date.now();
+  // 获取当前页面url
   const currentURL = window.location.href;
 
   // 确定当前页面对应的BASE_URL
@@ -154,16 +160,30 @@
   }
 
   // 检查是否已滚动到底部(不断重复执行),到底部时跳转到下一个话题
+  // ===== 检查最小浏览时间是否已满足 =====
+  function hasMetMinReadTime() {
+    return Date.now() - pageEnterTime >= minReadTime;
+  }
+
   function checkScroll() {
-    if (localStorage.getItem("read")) {
-      if (
-        window.innerHeight + window.scrollY >=
-        document.body.offsetHeight - 100
-      ) {
-        console.log("已滚动到底部");
+    if (localStorage.getItem("read") === "true") {
+      const atBottom =
+        window.innerHeight + window.scrollY >= document.body.offsetHeight - 100;
+
+      if (atBottom && hasMetMinReadTime()) {
+        // 到底部 且 已满足最小浏览时间，跳转下一篇
+        console.log("已滚动到底部且满足最小浏览时间，跳转下一话题");
         openNewTopic();
       } else {
+        // 未满足条件，继续滚动并轮询
+        if (!atBottom) {
         scrollToBottomSlowly();
+        } else {
+          // 已到底部但时间未到，等待剩余时间后再检查
+          const remaining = minReadTime - (Date.now() - pageEnterTime);
+          console.log(`已到底部，等待最小浏览时间，剩余约 ${Math.ceil(remaining / 1000)} 秒`);
+        }
+
         if (checkScrollTimeout !== null) {
           clearTimeout(checkScrollTimeout);
         }
@@ -181,14 +201,21 @@
       "autoLikeEnabled",
       localStorage.getItem("autoLikeEnabled")
     );
+
     if (localStorage.getItem("read") === "true") {
-      console.log("执行正常的滚动和检查逻辑");
-      checkScroll();
-      if (isAutoLikeEnabled()) {
-        autoLike();
-      }
+      waitForDOMReady(() => {
+        console.log("检测到 avatar，DOM 渲染完毕，启动滚动和点赞");
+        checkScroll();
+        if (isAutoLikeEnabled()) {
+          autoLike();
+        }
+      });
     }
+
+  // ===== 按钮必须在 load 后插入，避免 body 未就绪 =====
+    injectButtons();
   });
+
 
   // 获取当前时间戳
   const currentTime = Date.now();
@@ -219,6 +246,36 @@
     });
     button.dispatchEvent(event);
   }
+  function waitForDOMReady(callback) {
+    const selector = "img.avatar";
+
+    // 若已存在，直接执行
+    if (document.querySelector(selector)) {
+      callback();
+      return;
+    }
+
+    const observer = new MutationObserver((mutations, obs) => {
+      if (document.querySelector(selector)) {
+        obs.disconnect();
+        clearTimeout(fallbackTimer);
+        callback();
+      }
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+
+    // 兜底超时：30秒内未检测到则强制继续
+    const fallbackTimer = setTimeout(() => {
+      observer.disconnect();
+      console.warn("30秒内未检测到 avatar，兜底启动");
+      callback();
+    }, fallbackTimerTime);
+  }
+
 
   function autoLike() {
     console.log(`当前点赞计数 clickCounter: ${clickCounter}`);
@@ -268,72 +325,76 @@
       }, index * randomDelay); // 错开每个按钮的点击时间
     });
   }
-  const button = document.createElement("button");
-  // 初始化按钮文本基于当前的阅读状态
-  button.textContent =
+
+  // ===== 修复1：将按钮注入封装为函数，在 load 事件后调用 =====
+  function injectButtons() {
+    // 开始/停止阅读按钮
+    const button = document.createElement("button");
+    button.textContent =
     localStorage.getItem("read") === "true" ? "停止阅读" : "开始阅读";
-  button.style.position = "fixed";
-  button.style.bottom = "10px"; // 之前是 top
-  button.style.left = "10px"; // 之前是 right
-  button.style.zIndex = 1000;
-  button.style.backgroundColor = "#f0f0f0"; // 浅灰色背景
-  button.style.color = "#000"; // 黑色文本
-  button.style.border = "1px solid #ddd"; // 浅灰色边框
-  button.style.padding = "5px 10px"; // 内边距
-  button.style.borderRadius = "5px"; // 圆角
-  document.body.appendChild(button);
+    button.style.position = "fixed";
+    button.style.bottom = "10px"; // 之前是 top
+    button.style.left = "10px"; // 之前是 right
+    button.style.zIndex = 1000;
+    button.style.backgroundColor = "#f0f0f0"; // 浅灰色背景
+    button.style.color = "#000"; // 黑色文本
+    button.style.border = "1px solid #ddd"; // 浅灰色边框
+    button.style.padding = "5px 10px"; // 内边距
+    button.style.borderRadius = "5px"; // 圆角
+    document.body.appendChild(button);
 
-  button.onclick = function () {
-    const currentlyReading = localStorage.getItem("read") === "true";
-    const newReadState = !currentlyReading;
-    localStorage.setItem("read", newReadState.toString());
-    button.textContent = newReadState ? "停止阅读" : "开始阅读";
-    if (!newReadState) {
-      if (scrollInterval !== null) {
-        clearInterval(scrollInterval);
-        scrollInterval = null;
-      }
-      if (checkScrollTimeout !== null) {
-        clearTimeout(checkScrollTimeout);
-        checkScrollTimeout = null;
-      }
-      localStorage.removeItem("navigatingToNextTopic");
-    } else {
-      // 如果是Linuxdo，就导航到我的帖子
-      if (BASE_URL == "https://linux.do") {
-        window.location.href = "https://linux.do/t/topic/13716/900";
-      } else {
-        window.location.href = `${BASE_URL}/t/topic/1`;
-      }
-      checkScroll();
-    }
-  };
+    button.onclick = function () {
+        const currentlyReading = localStorage.getItem("read") === "true";
+        const newReadState = !currentlyReading;
+        localStorage.setItem("read", newReadState.toString());
+        button.textContent = newReadState ? "停止阅读" : "开始阅读";
+        if (!newReadState) {
+        if (scrollInterval !== null) {
+            clearInterval(scrollInterval);
+            scrollInterval = null;
+        }
+        if (checkScrollTimeout !== null) {
+            clearTimeout(checkScrollTimeout);
+            checkScrollTimeout = null;
+        }
+        localStorage.removeItem("navigatingToNextTopic");
+        } else {
+        // 如果是Linuxdo，就导航到我的帖子
+        if (BASE_URL == "https://linux.do") {
+            window.location.href = "https://linux.do/t/topic/13716/900";
+        } else {
+            window.location.href = `${BASE_URL}/t/topic/1`;
+        }
+            // 跳转后新页面会走 load 事件，此处无需再调用 checkScroll
+        }
+    };
 
-  //自动点赞按钮
-  // 在页面上添加一个控制自动点赞的按钮
-  const toggleAutoLikeButton = document.createElement("button");
-  toggleAutoLikeButton.textContent = isAutoLikeEnabled()
-    ? "禁用自动点赞"
-    : "启用自动点赞";
-  toggleAutoLikeButton.style.position = "fixed";
-  toggleAutoLikeButton.style.bottom = "50px"; // 之前是 top，且与另一个按钮错开位置
-  toggleAutoLikeButton.style.left = "10px"; // 之前是 right
-  toggleAutoLikeButton.style.zIndex = "1000";
-  toggleAutoLikeButton.style.backgroundColor = "#f0f0f0"; // 浅灰色背景
-  toggleAutoLikeButton.style.color = "#000"; // 黑色文本
-  toggleAutoLikeButton.style.border = "1px solid #ddd"; // 浅灰色边框
-  toggleAutoLikeButton.style.padding = "5px 10px"; // 内边距
-  toggleAutoLikeButton.style.borderRadius = "5px"; // 圆角
-  document.body.appendChild(toggleAutoLikeButton);
+    //自动点赞按钮
+    // 在页面上添加一个控制自动点赞的按钮
+    const toggleAutoLikeButton = document.createElement("button");
+    toggleAutoLikeButton.textContent = isAutoLikeEnabled()
+        ? "禁用自动点赞"
+        : "启用自动点赞";
+    toggleAutoLikeButton.style.position = "fixed";
+    toggleAutoLikeButton.style.bottom = "50px"; // 之前是 top，且与另一个按钮错开位置
+    toggleAutoLikeButton.style.left = "10px"; // 之前是 right
+    toggleAutoLikeButton.style.zIndex = "1000";
+    toggleAutoLikeButton.style.backgroundColor = "#f0f0f0"; // 浅灰色背景
+    toggleAutoLikeButton.style.color = "#000"; // 黑色文本
+    toggleAutoLikeButton.style.border = "1px solid #ddd"; // 浅灰色边框
+    toggleAutoLikeButton.style.padding = "5px 10px"; // 内边距
+    toggleAutoLikeButton.style.borderRadius = "5px"; // 圆角
+    document.body.appendChild(toggleAutoLikeButton);
 
-  // 为按钮添加点击事件处理函数
-  toggleAutoLikeButton.addEventListener("click", () => {
-    const isEnabled = !isAutoLikeEnabled();
-    setAutoLikeEnabled(isEnabled);
-    toggleAutoLikeButton.textContent = isEnabled
-      ? "禁用自动点赞"
-      : "启用自动点赞";
-  });
+    // 为按钮添加点击事件处理函数
+    toggleAutoLikeButton.addEventListener("click", () => {
+        const isEnabled = !isAutoLikeEnabled();
+        setAutoLikeEnabled(isEnabled);
+        toggleAutoLikeButton.textContent = isEnabled
+        ? "禁用自动点赞"
+        : "启用自动点赞";
+    });
+  }
   // 判断是否启用自动点赞
   function isAutoLikeEnabled() {
     // 从localStorage获取autoLikeEnabled的值，如果未设置，默认为"true"
