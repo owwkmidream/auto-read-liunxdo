@@ -6,6 +6,7 @@
 // @author       liuweiqing
 // @match        https://meta.discourse.org/*
 // @match        https://linux.do/*
+// @match        https://3a.lol/*
 // @match        https://meta.appinn.net/*
 // @match        https://community.openai.com/
 // @match        https://idcflare.com/*
