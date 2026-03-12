@@ -26,6 +26,7 @@
     "https://meta.appinn.net",
     "https://community.openai.com",
     "https://idcflare.com/",
+    "https://3a.lol/",
   ];
   const commentLimit = 1000;
   const topicListLimit = 100;
